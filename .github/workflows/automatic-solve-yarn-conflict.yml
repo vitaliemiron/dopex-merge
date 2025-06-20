@@ -19,14 +19,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Set dynamic branch names
+        id: vars
+        run: |
+          echo "HEAD_BRANCH=${{ github.event.inputs.head || github.head_ref }}" >> $GITHUB_OUTPUT
+          echo "BASE_BRANCH=${{ github.event.inputs.base || github.base_ref }}" >> $GITHUB_OUTPUT
+
       - name: Checkout head branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.head || github.head_ref }}
+          ref: ${{ steps.vars.outputs.HEAD_BRANCH }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Git
+      - name: Set up Git user
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -40,11 +46,11 @@ jobs:
       - name: Add base branch as remote and fetch
         run: |
           git remote add upstream https://github.com/${{ github.repository }}.git
-          git fetch upstream ${{ github.event.inputs.base || github.base_ref }}
+          git fetch upstream ${{ steps.vars.outputs.BASE_BRANCH }}
 
       - name: Attempt merge with base branch
         run: |
-          git merge upstream/${{ github.event.inputs.base || github.base_ref }} --no-commit || echo "::warning ::Merge conflict expected"
+          git merge upstream/${{ steps.vars.outputs.BASE_BRANCH }} --no-commit || echo "::warning ::Merge conflict expected"
 
       - name: Check for yarn.lock conflict
         id: conflict
@@ -57,7 +63,7 @@ jobs:
 
       - name: Exit if no yarn.lock conflict
         if: steps.conflict.outputs.conflicted == 'false'
-        run: echo "No conflict detected. Exiting."
+        run: echo "No conflict detected. Skipping auto-resolution."
 
       - name: Auto-resolve yarn.lock conflict and install
         if: steps.conflict.outputs.conflicted == 'true'
@@ -68,4 +74,8 @@ jobs:
           yarn install
           git add yarn.lock
           git commit -m "fix: auto-resolved yarn.lock conflict"
-          git push origin HEAD:${{ github.event.inputs.head || github.head_ref }}
+
+      - name: Push resolved yarn.lock
+        if: steps.conflict.outputs.conflicted == 'true'
+        run: |
+          git push origin HEAD:${{ steps.vars.outputs.HEAD_BRANCH }}
