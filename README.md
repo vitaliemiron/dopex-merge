@@ -1,3 +1,2 @@
 # dopex-merge
-test
 o
