@@ -1,0 +1,52 @@
+name: Fix yarn.lock conflicts safely
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  fix-yarn-lock:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install yarn-deduplicate
+        run: npm install -g yarn-deduplicate
+
+      - name: Check for yarn.lock conflict
+        run: |
+          if git ls-files -u | grep -q 'yarn.lock'; then
+            echo "CONFLICT=true" >> $GITHUB_ENV
+          else
+            echo "CONFLICT=false" >> $GITHUB_ENV
+          fi
+
+      - name: Resolve conflict and deduplicate
+        if: env.CONFLICT == 'true'
+        run: |
+          echo "Fixing yarn.lock with conflict resolution"
+
+          # Take 'ours' version (PR’s version) to keep its changes
+          git checkout --ours yarn.lock || git checkout --theirs yarn.lock
+          git add yarn.lock
+          git commit -m "partial: resolve yarn.lock conflict using ours/theirs"
+
+          # Now deduplicate to clean up mess
+          yarn-deduplicate
+          yarn install
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add yarn.lock
+          git commit --amend --no-edit || git commit -m "fix: yarn.lock auto-resolved"
+          git push origin HEAD:${{ github.head_ref }} --force
