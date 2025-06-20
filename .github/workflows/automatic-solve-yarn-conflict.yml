@@ -1,52 +1,71 @@
-name: Fix yarn.lock conflicts safely
+name: Auto-resolve yarn.lock conflict
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+
+  workflow_dispatch:
+    inputs:
+      base:
+        description: 'Base branch (e.g. main)'
+        required: true
+        default: 'main'
+      head:
+        description: 'Head branch (e.g. feature-x)'
+        required: true
 
 jobs:
   fix-yarn-lock:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout branch
+      - name: Checkout head branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
+          ref: ${{ github.event.inputs.head || github.head_ref }}
+          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Node.js
+      - name: Set up Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Set up Node.js and yarn-deduplicate
         uses: actions/setup-node@v4
         with:
           node-version: 18
+      - run: npm install -g yarn-deduplicate
 
-      - name: Install yarn-deduplicate
-        run: npm install -g yarn-deduplicate
+      - name: Add base branch as remote and fetch
+        run: |
+          git remote add upstream https://github.com/${{ github.repository }}.git
+          git fetch upstream ${{ github.event.inputs.base || github.base_ref }}
+
+      - name: Attempt merge with base branch
+        run: |
+          git merge upstream/${{ github.event.inputs.base || github.base_ref }} --no-commit || echo "::warning ::Merge conflict expected"
 
       - name: Check for yarn.lock conflict
+        id: conflict
         run: |
           if git ls-files -u | grep -q 'yarn.lock'; then
-            echo "CONFLICT=true" >> $GITHUB_ENV
+            echo "conflicted=true" >> $GITHUB_OUTPUT
           else
-            echo "CONFLICT=false" >> $GITHUB_ENV
+            echo "conflicted=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Resolve conflict and deduplicate
-        if: env.CONFLICT == 'true'
+      - name: Exit if no yarn.lock conflict
+        if: steps.conflict.outputs.conflicted == 'false'
+        run: echo "No conflict detected. Exiting."
+
+      - name: Auto-resolve yarn.lock conflict and install
+        if: steps.conflict.outputs.conflicted == 'true'
         run: |
-          echo "Fixing yarn.lock with conflict resolution"
-
-          # Take 'ours' version (PR’s version) to keep its changes
-          git checkout --ours yarn.lock || git checkout --theirs yarn.lock
-          git add yarn.lock
-          git commit -m "partial: resolve yarn.lock conflict using ours/theirs"
-
-          # Now deduplicate to clean up mess
+          echo "Resolving yarn.lock conflict..."
+          git checkout --theirs yarn.lock || git checkout --ours yarn.lock
           yarn-deduplicate
           yarn install
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add yarn.lock
-          git commit --amend --no-edit || git commit -m "fix: yarn.lock auto-resolved"
-          git push origin HEAD:${{ github.head_ref }} --force
+          git commit -m "fix: auto-resolved yarn.lock conflict"
+          git push origin HEAD:${{ github.event.inputs.head || github.head_ref }}
